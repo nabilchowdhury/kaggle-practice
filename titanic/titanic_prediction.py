@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+
 from sklearn.linear_model import LogisticRegression, Perceptron, SGDClassifier
 from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import RandomForestClassifier
@@ -24,6 +25,7 @@ df = {
     'test_df': pd.read_csv('./datasets/test.csv')
 }
 
+passengerIds = df['test_df']['PassengerId']
 
 def preview():
     '''
@@ -103,6 +105,13 @@ def rank_algos(X_train, Y_train, X_test):
         'Score': scores
     })
 
+    submission = pd.DataFrame({
+        'PassengerId': passengerIds,
+        'Survived': predictions['random_forest']
+    })
+
+    submission.to_csv('./submission.csv', index=False)
+
     print(models.sort_values(by='Score', ascending=False))
 
 
@@ -112,19 +121,63 @@ Processing
 # Do one-hot encoding for all categorical features (using dummy vars)
 # Maybe combine SibSp and Parch into single feature?
 
+# Create Title Feature
 for key in df:
     df[key]['Title'] = df[key]['Name'].str.extract('([A-Za-z]+)\.', expand=False)
-    df[key].drop(['Name'], axis=1, inplace=True)
 
+# Aggregate Titles
 for data in df.values():
     data.replace(['Ms', 'Mme', 'Mlle'], 'Miss', inplace=True)
     data.replace(['Countess', 'Lady', 'Sir'], 'Royal', inplace=True)
     data.replace(['Col', 'Major'], 'Army', inplace=True)
     data.replace(['Capt', 'Don', 'Jonkheer', 'Rev'], 'Rare', inplace=True)
 
+# Fill in missing Embarked
+mode_embarked = df['train_df']['Embarked'].dropna().mode()[0]
+for data in df.values():
+    data['Embarked'].fillna(mode_embarked, inplace=True)
+
+# Fill in missing Fare in test_df
+df['test_df']['Fare'].fillna(df['test_df']['Fare'].dropna().median(), inplace=True)
+
+for data in df.values():
+    data.loc[data['SibSp'] >= 5, 'SibSp'] = 5
+    data.loc[data['Parch'] >= 4, 'SibSp'] = 4
+    data['FamilyMembers'] = data['SibSp'] + data['Parch'] + 1
+    data.loc[data['FamilyMembers'] >= 8, 'SibSp'] = 8
+
+# print(df['train_df'][['FamilyMembers', 'Survived']].groupby('FamilyMembers', as_index=False).mean().sort_values(by='Survived', ascending=False))
+
+# Check which cols contain null (if any)
+# print(df['train_df'].isnull().sum())
+# print(df['test_df'].isnull().sum())
+guess_ages = np.zeros([2, 3])
+embarked_list = ['']
+for data in df.values():
+    for i in range(0, 2):
+        for j in range(0, 3):
+            guess_df = data[(data['Sex'] == i) & (data['Pclass'] == j + 1)]['Age'].dropna()
+
+            age_guess = guess_df.median()
+            guess_ages[i, j] = int(age_guess / 0.5 + 0.5) * 0.5
+
+    for i in range(0, 2):
+        for j in range(0, 3):
+            data.loc[(data.Age.isnull()) & (data.Sex == i) & (data.Pclass == j + 1), 'Age'] = guess_ages[i, j]
+
+        data['Age'] = df['Age'].astype('int')
+
+
+for data in df.values():
+    data.loc[data['Age'] <= 16, 'Age'] = 0
+    data.loc[(data['Age'] > 16) & (data['Age'] <= 32), 'Age'] = 1
+    data.loc[(data['Age'] > 32) & (data['Age'] <= 48), 'Age'] = 2
+    data.loc[(data['Age'] > 48) & (data['Age'] <= 64), 'Age'] = 3
+    data.loc[data['Age'] > 64, 'Age'] = 4
+
 for key in df:
-    df[key] = pd.get_dummies(df[key], columns=['Sex', 'Embarked', 'Pclass', 'Title'])
-    df[key].drop(['Cabin', 'Ticket', 'PassengerId', 'SibSp', 'Parch', 'Fare', 'Age'], axis=1, inplace=True) # Also drop Cabin as we won't use it
+    df[key] = pd.get_dummies(df[key], columns=['Sex', 'Embarked', 'Pclass', 'Title', 'FamilyMembers', 'Age'])
+    df[key].drop(['Cabin', 'Name', 'Ticket', 'PassengerId', 'SibSp', 'Parch'], axis=1, inplace=True) # Also drop Cabin as we won't use it
 
 df['train_df'], df['test_df'] = df['train_df'].align(df['test_df'], join='outer', axis=1, fill_value=0)
 df['test_df'].drop('Survived', axis=1, inplace=True)
